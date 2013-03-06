@@ -5,6 +5,8 @@ from theano.ifelse import ifelse
 from theano.sandbox.scan import scan
 #from raw_scan import scan
 import numpy
+floatX = theano.config.floatX
+npy_floatX = getattr(numpy, floatX)
 
 strlinker = 'vm'
 gpu_mode = theano.Mode(linker='vm')
@@ -78,47 +80,47 @@ def symGivens2(a,b):
     %     (2) MATLAB's function PLANEROT.
     """
     c = TT.switch(
-        TT.eq(b, numpy.float32(0.)),
-        TT.switch(TT.eq(a, numpy.float32(0.)),
-                  TT.constant(numpy.float32(1.)),
+        TT.eq(b, npy_floatX(0.)),
+        TT.switch(TT.eq(a, npy_floatX(0.)),
+                  TT.constant(npy_floatX(1.)),
                   TT.sgn(a)),
         TT.switch(
-            TT.eq(a, numpy.float32(0.)),
-            TT.constant(numpy.float32(0.)),
+            TT.eq(a, npy_floatX(0.)),
+            TT.constant(npy_floatX(0.)),
             TT.switch(TT.gt(abs(b), abs(a)),
-                      (a/b)*TT.sgn(b)/TT.sqrt(numpy.float32(1.) + (a/b)**2),
-                      TT.sgn(a)/TT.sqrt(numpy.float32(1.) + (b/a)**2))))
+                      (a/b)*TT.sgn(b)/TT.sqrt(npy_floatX(1.) + (a/b)**2),
+                      TT.sgn(a)/TT.sqrt(npy_floatX(1.) + (b/a)**2))))
     s = TT.switch(
-        TT.eq(b, numpy.float32(0.)),
-        TT.constant(numpy.float32(0.)),
+        TT.eq(b, npy_floatX(0.)),
+        TT.constant(npy_floatX(0.)),
         TT.switch(
-            TT.eq(a, numpy.float32(0.)),
+            TT.eq(a, npy_floatX(0.)),
             TT.sgn(b),
             TT.switch(TT.gt(abs(b), abs(a)),
-                      TT.sgn(b)/TT.sqrt(numpy.float32(1.) + (a/b)**2),
-                      (b/a)*TT.sgn(a)/TT.sqrt(numpy.float32(1.) +
+                      TT.sgn(b)/TT.sqrt(npy_floatX(1.) + (a/b)**2),
+                      (b/a)*TT.sgn(a)/TT.sqrt(npy_floatX(1.) +
                                               (b/a)**2))))
 
     d = TT.switch(
-        TT.eq(b, numpy.float32(0.)),
+        TT.eq(b, npy_floatX(0.)),
         abs(a),
         TT.switch(
-            TT.eq(a, numpy.float32(0.)),
+            TT.eq(a, npy_floatX(0.)),
             abs(b),
             TT.switch(TT.gt(abs(b), abs(a)),
-                      b/(TT.sgn(b)/TT.sqrt(numpy.float32(1.) + (a/b)**2)),
-                      a/(TT.sgn(a)/TT.sqrt(numpy.float32(1.) + (b/a)**2)))))
+                      b/(TT.sgn(b)/TT.sqrt(npy_floatX(1.) + (a/b)**2)),
+                      a/(TT.sgn(a)/TT.sqrt(npy_floatX(1.) + (b/a)**2)))))
     return c,s,d
 
 
 def minres(compute_Av,
            bs,
-           rtol=numpy.float32(1e-6),
+           rtol=npy_floatX(1e-6),
            maxit=20,
            Ms=None,
-           damp=numpy.float32(0.),
-           maxxnorm=numpy.float32(1e15),
-           Acondlim=numpy.float32(1e16),
+           damp=npy_floatX(0.),
+           maxxnorm=npy_floatX(1e15),
+           Acondlim=npy_floatX(1e16),
            mode = None,
            xinit = None,
            profile=0):
@@ -220,10 +222,10 @@ def minres(compute_Av,
         bs = list(bs)
         return_as_list = True
 
-    eps = numpy.float32(1e-23)
+    eps = npy_floatX(1e-23)
 
     # Initialise
-    flag = theano.shared(numpy.float32(0.))
+    flag = theano.shared(npy_floatX(0.))
 
     #------------------------------------------------------------------
     # Set up p and v for the first Lanczos vector v1.
@@ -318,7 +320,7 @@ def minres(compute_Av,
         else:
             betan = norm(r3s)
         pnorml = pnorm
-        pnorm = TT.switch(TT.eq(niter, numpy.float32(0.)),
+        pnorm = TT.switch(TT.eq(niter, npy_floatX(0.)),
                           TT.sqrt(TT.sqr(alpha) + TT.sqr(betan)),
                           TT.sqrt(TT.sqr(alpha) + TT.sqr(betan) +
                                   TT.sqr(beta)))
@@ -348,13 +350,13 @@ def minres(compute_Av,
 
         dl2s = [dl for dl in dls]
         dls = [d for d in ds]
-        ds = [TT.switch(TT.neq(gamma, numpy.float32(0.)),
+        ds = [TT.switch(TT.neq(gamma, npy_floatX(0.)),
                         (v - epln*dl2 - dlta*dl)/gamma,
                         v)
               for v,dl2,dl in zip(vs,dl2s, dls)]
-        d_norm = TT.switch(TT.neq(gamma,numpy.float32(0.)),
+        d_norm = TT.switch(TT.neq(gamma,npy_floatX(0.)),
                            norm(ds),
-                           TT.constant((numpy.float32(numpy.inf))))
+                           TT.constant((npy_floatX(numpy.inf))))
 
 
         # Update x except if it will become too big
@@ -368,13 +370,13 @@ def minres(compute_Av,
                         x) for dl2,x in zip(dl2s,xs)]
 
         flag = TT.switch(TT.ge(xnorm, maxxnorm),
-                         numpy.float32(6.), flag)
+                         npy_floatX(6.), flag)
         # Estimate various norms
         rnorml      = rnorm # ||r_{k-1}||
         Anorml      = Anorm
         Acondl      = Acond
         relrnorml   = relrnorm
-        flag_no_6 = TT.neq(flag, numpy.float32(6.))
+        flag_no_6 = TT.neq(flag, npy_floatX(6.))
         Dnorm = TT.switch(flag_no_6,
                           TT.sqrt(TT.sqr(Dnorm) + TT.sqr(d_norm)),
                           Dnorm)
@@ -384,7 +386,7 @@ def minres(compute_Av,
                              rnorm / (Anorm*xnorm + bnorm),
                              relrnorm)
         Tnorm = TT.switch(flag_no_6,
-                          TT.switch(TT.eq(niter, numpy.float32(0.)),
+                          TT.switch(TT.eq(niter, npy_floatX(0.)),
                                     TT.sqrt(TT.sqr(alpha) + TT.sqr(betan)),
                                     TT.sqrt(TT.sqr(Tnorm) +
                                             TT.sqr(beta) +
@@ -405,34 +407,34 @@ def minres(compute_Av,
         epsr = Anorm * xnorm * rtol
         #Test for singular Hk (hence singular A)
         # or x is already an LS solution (so again A must be singular).
-        t1 = numpy.float32(1) + relrnorm
-        t2 = numpy.float32(1) + relArnorml
+        t1 = npy_floatX(1) + relrnorm
+        t2 = npy_floatX(1) + relArnorml
         flag = TT.switch(
-            TT.bitwise_or(TT.eq(flag, numpy.float32(0.)),
-                          TT.eq(flag, numpy.float32(6.))),
-                      TT.switch(TT.le(t1, numpy.float32(1.)),
-                                numpy.float32(3.),
-                      TT.switch(TT.le(t2, numpy.float32(1.)),
-                                numpy.float32(4.),
+            TT.bitwise_or(TT.eq(flag, npy_floatX(0.)),
+                          TT.eq(flag, npy_floatX(6.))),
+                      TT.switch(TT.le(t1, npy_floatX(1.)),
+                                npy_floatX(3.),
+                      TT.switch(TT.le(t2, npy_floatX(1.)),
+                                npy_floatX(4.),
                       TT.switch(TT.le(relrnorm, rtol),
-                                numpy.float32(1.),
-                      TT.switch(TT.le(Anorm, numpy.float32(1e-20)),
-                                numpy.float32(12),
+                                npy_floatX(1.),
+                      TT.switch(TT.le(Anorm, npy_floatX(1e-20)),
+                                npy_floatX(12),
                       TT.switch(TT.le(relArnorml, rtol),
-                                numpy.float32(10.),
+                                npy_floatX(10.),
                       TT.switch(TT.ge(epsx, beta1),
-                                numpy.float32(5.),
+                                npy_floatX(5.),
                       TT.switch(TT.ge(xnorm, maxxnorm),
-                                numpy.float32(6.),
-                      TT.switch(TT.ge(niter, TT.cast(maxit,'float32')),
-                                numpy.float32(8.),
+                                npy_floatX(6.),
+                      TT.switch(TT.ge(niter, TT.cast(maxit,floatX)),
+                                npy_floatX(8.),
                                 flag)))))))),
             flag)
 
         flag = TT.switch(TT.lt(Axnorm, rtol*Anorm*xnorm),
-                               numpy.float32(11.), flag)
+                               npy_floatX(11.), flag)
         return [
-            niter + numpy.float32(1.),
+            niter + npy_floatX(1.),
             beta,
             betan,
             phi,
@@ -458,49 +460,49 @@ def minres(compute_Av,
 
     states = []
     # 0 niter
-    states.append(TT.constant(numpy.float32([0])))
+    states.append(TT.constant(npy_floatX([0])))
     # 1 beta
-    states.append(TT.constant(numpy.float32([0])))
+    states.append(TT.constant(npy_floatX([0])))
     # 2 betan
     states.append(TT.unbroadcast(TT.shape_padleft(beta1),0))
     # 3 phi
     states.append(TT.unbroadcast(TT.shape_padleft(beta1),0))
     # 4 Acond
-    states.append(TT.constant(numpy.float32([1])))
+    states.append(TT.constant(npy_floatX([1])))
     # 5 cs
-    states.append(TT.constant(numpy.float32([-1])))
+    states.append(TT.constant(npy_floatX([-1])))
     # 6 dbarn
-    states.append(TT.constant(numpy.float32([0])))
+    states.append(TT.constant(npy_floatX([0])))
     # 7 eplnn
-    states.append(TT.constant(numpy.float32([0])))
+    states.append(TT.constant(npy_floatX([0])))
     # 8 rnorm
     states.append(TT.unbroadcast(TT.shape_padleft(beta1),0))
     # 9 sn
-    states.append(TT.constant(numpy.float32([0])))
+    states.append(TT.constant(npy_floatX([0])))
     # 10 Tnorm
-    states.append(TT.constant(numpy.float32([0])))
+    states.append(TT.constant(npy_floatX([0])))
     # 11 rnorml
     states.append(TT.unbroadcast(TT.shape_padleft(beta1),0))
     # 12 xnorm
-    states.append(TT.constant(numpy.float32([0])))
+    states.append(TT.constant(npy_floatX([0])))
     # 13 Dnorm
-    states.append(TT.constant(numpy.float32([0])))
+    states.append(TT.constant(npy_floatX([0])))
     # 14 gamma
-    states.append(TT.constant(numpy.float32([0])))
+    states.append(TT.constant(npy_floatX([0])))
     # 15 pnorm
-    states.append(TT.constant(numpy.float32([0])))
+    states.append(TT.constant(npy_floatX([0])))
     # 16 gammal
-    states.append(TT.constant(numpy.float32([0])))
+    states.append(TT.constant(npy_floatX([0])))
     # 17 Axnorm
-    states.append(TT.constant(numpy.float32([0])))
+    states.append(TT.constant(npy_floatX([0])))
     # 18 relrnorm
-    states.append(TT.constant(numpy.float32([1])))
+    states.append(TT.constant(npy_floatX([1])))
     # 19 relArnorml
-    states.append(TT.constant(numpy.float32([1])))
+    states.append(TT.constant(npy_floatX([1])))
     # 20 Anorm
-    states.append(TT.constant(numpy.float32([0])))
+    states.append(TT.constant(npy_floatX([0])))
     # 21 flag
-    states.append(TT.constant(numpy.float32([0])))
+    states.append(TT.constant(npy_floatX([0])))
 
     xs  = [TT.unbroadcast(TT.shape_padleft(xi),0) for xi in xinit]
     ds  = [TT.unbroadcast(TT.shape_padleft(xi),0) for xi in xinit]
@@ -530,8 +532,8 @@ def minres(compute_Av,
 
 def test_1():
     n = 10
-    on = numpy.ones((n,1), dtype='float32')
-    A = numpy.zeros((n,n), dtype='float32')
+    on = numpy.ones((n,1), dtype=floatX)
+    A = numpy.zeros((n,n), dtype=floatX)
     for k in xrange(n):
         A[k,k] = 4.
         if k > 0:
@@ -539,13 +541,13 @@ def test_1():
             A[k,k-1] = -2.
     b = A.sum(axis=1)
     x0 = numpy.random.uniform(size=(n,))*.1 + .5
-    rtol=numpy.float32(1e-10)
+    rtol=npy_floatX(1e-10)
     maxit = 50
-    M = numpy.ones((n,), dtype='float32')*4.
-    tA = theano.shared(A.astype('float32'))
-    tx0 = theano.shared(x0.astype('float32'))
-    tb = theano.shared(b.astype('float32'))
-    tM = theano.shared(M.astype('float32'))
+    M = numpy.ones((n,), dtype=floatX)*4.
+    tA = theano.shared(A.astype(floatX))
+    tx0 = theano.shared(x0.astype(floatX))
+    tb = theano.shared(b.astype(floatX))
+    tM = theano.shared(M.astype(floatX))
     compute_Av = lambda x : [TT.dot(tA,x)]
     xs, flag, iters, relres, relAres, Anorm, Acond, xnorm, Axnorm = \
             minres(compute_Av, [tb], rtol = rtol, maxit = maxit,
@@ -578,18 +580,18 @@ def test_2():
     a = -10
     b = -a
     n = 2*b//h + 1
-    A = numpy.zeros((n,n), dtype='float32')
-    A = numpy.zeros((n,n), dtype='float32')
+    A = numpy.zeros((n,n), dtype=floatX)
+    A = numpy.zeros((n,n), dtype=floatX)
     v = a
     for k in xrange(n):
         A[k,k] = v
         v += h
-    b = numpy.ones((n,), dtype='float32')
-    rtol=numpy.float32(1e-6)
+    b = numpy.ones((n,), dtype=floatX)
+    rtol=npy_floatX(1e-6)
     maxxnorm = 1e8
     maxit = 50
-    tA = theano.shared(A.astype('float32'))
-    tb = theano.shared(b.astype('float32'))
+    tA = theano.shared(A.astype(floatX))
+    tb = theano.shared(b.astype(floatX))
     compute_Av = lambda x : [TT.dot(tA,x)]
     xs, flag, iters, relres, relAres, Anorm, Acond, xnorm, Axnorm = \
             minres(compute_Av, [tb], rtol = rtol, maxit = maxit,

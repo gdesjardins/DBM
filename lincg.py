@@ -5,7 +5,7 @@ from theano.ifelse import ifelse
 from theano.sandbox.scan import scan
 from theano.printing import Print
 
-def linear_cg(compute_Gv, bs, xinit = None,
+def linear_cg_fletcher_reeves(compute_Gv, bs, xinit = None,
               rtol = 1e-6, maxit = 1000, damp=0,
               floatX = None, profile=0):
     """
@@ -52,7 +52,7 @@ def linear_cg(compute_Gv, bs, xinit = None,
     return [x[0] for x in fxs]
 
 
-def linear_cg_precond(compute_Gv, b, M, xinit = None,
+def linear_cg_polyak_ribiere(compute_Gv, b, M=None, xinit = None,
                       rtol = 1e-16, maxit = 100000, floatX = None):
     """
     assume all are lists all the time
@@ -60,22 +60,30 @@ def linear_cg_precond(compute_Gv, b, M, xinit = None,
         http://en.wikipedia.org/wiki/Conjugate_gradient_method
     """
     n_params = len(b)
-    def loop(rzk, *args):
+    def loop(*args):
         pk = args[:n_params]
         rk = args[n_params:2*n_params]
-        xk = args[2*n_params:]
+        zk = args[2*n_params:3*n_params]
+        xk = args[-n_params:]
         A_pk = compute_Gv(*pk)
-        alphak = rzk/sum((A_pk_ * pk_).sum() for A_pk_, pk_ in zip(A_pk, pk))
+        alphak_num = sum((rk_ * zk_).sum() for rk_, zk_ in zip(rk,zk))
+        alphak_denum = sum((A_pk_ * pk_).sum() for A_pk_, pk_ in zip(A_pk, pk))
+        alphak = alphak_num / alphak_denum
         xkp1 = [xk_ + alphak * pk_ for xk_, pk_ in zip(xk, pk)]
         rkp1 = [rk_ - alphak * A_pk_ for rk_, A_pk_, in zip(rk, A_pk)]
-        zkp1 = [rkp1_ / m_ for rkp1_, m_ in zip(rkp1, M)]
-        rzkp1 = sum((zkp1_*rkp1_).sum() for rkp1_,zkp1_ in zip(rkp1,zkp1))
-        betak = rzkp1 / rzk
+        if M:
+            zkp1 = [rkp1_ / m_ for rkp1_, m_ in zip(rkp1, M)]
+        else:
+            zkp1 = rkp1
+        # compute beta_k using Polak-Ribiere
+        betak_num = sum((zkp1_* (rkp1_ - rk_)).sum() for rkp1_,rk_,zkp1_ in zip(rkp1,rk,zkp1))
+        betak_denum = alphak_num
+        betak = betak_num / betak_denum
         pkp1 = [zkp1_ + betak * pk_ for zkp1_, pk_ in zip(zkp1,pk)]
         # compute termination critera
         rkp1_norm = sum((rkp1_**2).sum() for rkp1_ in rkp1)
-        return [rzkp1] + pkp1 + rkp1 + xkp1,\
-                theano.scan_module.until(abs(rkp1_norm) < rtol)
+        return pkp1 + rkp1 + zkp1 + xkp1,\
+               theano.scan_module.until(abs(rkp1_norm) < rtol)
 
     if xinit is None:
         r0_temp = b
@@ -86,16 +94,20 @@ def linear_cg_precond(compute_Gv, b, M, xinit = None,
         x0 = [tensor.unbroadcast(tensor.shape_padleft(xinit_)) for xinit_ in xinit]
 
     r0 = [tensor.unbroadcast(tensor.shape_padleft(r0_temp_)) for r0_temp_ in r0_temp]
-    p0 = [tensor.unbroadcast(tensor.shape_padleft(r0_temp_ / m_)) for r0_temp_, m_ in zip(r0_temp, M)]
-    rzk = sum((r0_temp_**2 / m_).sum() for r0_temp_, m_ in zip(r0_temp, M))
-    rzk = tensor.unbroadcast(tensor.shape_padleft(rzk))
+    if M:
+        z0 = [tensor.unbroadcast(tensor.shape_padleft(r0_temp_ / m_)) for r0_temp_, m_ in zip(r0_temp, M)]
+    else:
+        z0 = r0
+    p0 = z0
+
     outs, updates = scan(loop,
-                         states = [rzk] + p0 + r0 + x0,
+                         states = p0 + r0 + z0 + x0,
                          n_steps = maxit,
                          mode = theano.Mode(linker='c|py'),
                          name = 'linear_conjugate_gradient',
                          profile=0)
-    fxs = outs[1+2*n_params:]
+    fxs = outs[-n_params:]
     return [x[0] for x in fxs]
 
+linear_cg = linear_cg_polyak_ribiere
 
