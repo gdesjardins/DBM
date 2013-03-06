@@ -224,8 +224,6 @@ def minres(compute_Av,
 
     # Initialise
     flag = theano.shared(numpy.float32(0.))
-    beta1 = norm(bs)
-
 
     #------------------------------------------------------------------
     # Set up p and v for the first Lanczos vector v1.
@@ -237,6 +235,7 @@ def minres(compute_Av,
         r3s = [b for b in bs]
         r2s = [b for b in bs]
         r1s = [b for b in bs]
+        beta1 = norm(bs)
         if Ms is not None:
             r3s = [b/m for b,m in zip(bs,Ms)]
             beta1 = norm(r3s, bs)
@@ -246,6 +245,7 @@ def minres(compute_Av,
         r3s = copy.copy(res)
         r2s = copy.copy(res)
         r1s = copy.copy(res)
+        beta1 = norm(res)
         if Ms is not None:
             r3s = [r/m for r,m in zip(r3s, Ms)]
             beta1 = norm(r3s, res)
