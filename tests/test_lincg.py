@@ -34,7 +34,8 @@ vals['g'] = rng.rand(nparams).astype(floatX)
 ## now compute L^-1 g
 vals['Linv_g'] = linalg.cho_solve(linalg.cho_factor(vals['L']), vals['g'])
 
-def test_lincg():
+
+def test_lincg_fletcher():
     rval = lincg.linear_cg_fletcher_reeves(
             lambda x: [T.dot(symb['L'], x)],
             [symb['g']],
@@ -51,7 +52,7 @@ def test_lincg():
     numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=5)
 
 
-def test_lincg_xinit():
+def test_lincg_fletcher_xinit():
     symb['xinit'] = T.vector('xinit')
     vals['xinit'] = rng.rand(nparams).astype(floatX)
 
@@ -86,6 +87,27 @@ def test_lincg_polyak():
     Linv_g = f(vals['L'], vals['g'])
     print 'test_lincg_polyak runtime (s):', time.time() - t1
     numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=5)
+
+
+def test_lincg_polyak_xinit():
+    symb['xinit'] = T.vector('xinit')
+    vals['xinit'] = rng.rand(nparams).astype(floatX)
+
+    rval = lincg.linear_cg_polyak_ribiere(
+            lambda x: [T.dot(symb['L'], x)],
+            [symb['g']],
+            M = None,
+            xinit = [symb['xinit']],
+            rtol=1e-10,
+            maxit = 10000,
+            floatX = floatX)
+
+    f = theano.function([symb['L'], symb['g'], symb['xinit']], rval[0])
+    t1 = time.time()
+    Linv_g = f(vals['L'], vals['g'], vals['xinit'])
+    print 'test_lincg_polyak runtime (s):', time.time() - t1
+    numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=5)
+
 
 
 def test_lincg_polyak_precond():
