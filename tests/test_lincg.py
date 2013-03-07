@@ -82,10 +82,12 @@ def test_lincg_polyak():
             maxit = 10000,
             floatX = floatX)
 
-    f = theano.function([symb['L'], symb['g']], rval[0])
+    f = theano.function([symb['L'], symb['g']], rval)
     t1 = time.time()
-    Linv_g = f(vals['L'], vals['g'])
+    [Linv_g, niter, rerr] = f(vals['L'], vals['g'])
     print 'test_lincg_polyak runtime (s):', time.time() - t1
+    print '\t niter = ', niter
+    print '\t residual error = ', rerr
     numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=5)
 
 
@@ -102,10 +104,12 @@ def test_lincg_polyak_xinit():
             maxit = 10000,
             floatX = floatX)
 
-    f = theano.function([symb['L'], symb['g'], symb['xinit']], rval[0])
+    f = theano.function([symb['L'], symb['g'], symb['xinit']], rval)
     t1 = time.time()
-    Linv_g = f(vals['L'], vals['g'], vals['xinit'])
+    [Linv_g, niter, rerr] = f(vals['L'], vals['g'], vals['xinit'])
     print 'test_lincg_polyak runtime (s):', time.time() - t1
+    print '\t niter = ', niter
+    print '\t residual error = ', rerr
     numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=5)
 
 
@@ -122,10 +126,12 @@ def test_lincg_polyak_precond():
             maxit = 10000,
             floatX = floatX)
 
-    f = theano.function([symb['L'], symb['g'], symb['M']], rval[0])
+    f = theano.function([symb['L'], symb['g'], symb['M']], rval)
     t1 = time.time()
-    Linv_g = f(vals['L'], vals['g'], vals['M'])
+    [Linv_g, niter, rerr] = f(vals['L'], vals['g'], vals['M'])
     print 'test_lincg runtime (s):', time.time() - t1
+    print '\t niter = ', niter
+    print '\t residual error = ', rerr
     numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=5)
 
     ### test scipy implementation ###

@@ -60,7 +60,7 @@ def linear_cg_polyak_ribiere(compute_Gv, b, M=None, xinit = None,
         http://en.wikipedia.org/wiki/Conjugate_gradient_method
     """
     n_params = len(b)
-    def loop(*args):
+    def loop(niter, *args):
         pk = args[:n_params]
         rk = args[n_params:2*n_params]
         zk = args[2*n_params:3*n_params]
@@ -82,7 +82,7 @@ def linear_cg_polyak_ribiere(compute_Gv, b, M=None, xinit = None,
         pkp1 = [zkp1_ + betak * pk_ for zkp1_, pk_ in zip(zkp1,pk)]
         # compute termination critera
         rkp1_norm = sum((rkp1_**2).sum() for rkp1_ in rkp1)
-        return pkp1 + rkp1 + zkp1 + xkp1,\
+        return [niter + 1, rkp1_norm] + pkp1 + rkp1 + zkp1 + xkp1,\
                theano.scan_module.until(abs(rkp1_norm) < rtol)
 
     if xinit is None:
@@ -93,6 +93,7 @@ def linear_cg_polyak_ribiere(compute_Gv, b, M=None, xinit = None,
         r0_temp = [b[i] - init_Gv[i] for i in xrange(len(b))]
         x0 = [tensor.unbroadcast(tensor.shape_padleft(xinit_)) for xinit_ in xinit]
 
+    niter0 = tensor.zeros((1,))
     r0 = [tensor.unbroadcast(tensor.shape_padleft(r0_temp_)) for r0_temp_ in r0_temp]
     if M:
         z0 = [tensor.unbroadcast(tensor.shape_padleft(r0_temp_ / m_)) for r0_temp_, m_ in zip(r0_temp, M)]
@@ -101,13 +102,13 @@ def linear_cg_polyak_ribiere(compute_Gv, b, M=None, xinit = None,
     p0 = z0
 
     outs, updates = scan(loop,
-                         states = p0 + r0 + z0 + x0,
+                         states = [niter0, None] + p0 + r0 + z0 + x0,
                          n_steps = maxit,
                          mode = theano.Mode(linker='c|py'),
                          name = 'linear_conjugate_gradient',
                          profile=0)
     fxs = outs[-n_params:]
-    return [x[0] for x in fxs]
+    return [x[0] for x in fxs] + [outs[0], outs[1][-1]]
 
 linear_cg = linear_cg_polyak_ribiere
 
