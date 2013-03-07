@@ -19,8 +19,9 @@ from pylearn2.space import VectorSpace
 
 from DBM import tools
 from DBM import cost as utils_cost
-from DBM import minres
+from DBM import lincg
 from DBM import natural
+from DBM import fisher
 from DBM import utils
 from DBM import sharedX, floatX, npy_floatX
 
@@ -32,7 +33,7 @@ class DBM(Model, Block):
             pos_mf_steps=1, pos_sample_steps=0, neg_sample_steps=1, 
             lr = 1e-3, lr_anneal_coeff=0, lr_timestamp=None, lr_mults = {},
             l1 = {}, l2 = {}, l1_inf={}, flags={},
-            minres_params = {},
+            cg_params = {},
             batch_size = 13,
             computational_bs = 0,
             compile=True,
@@ -61,7 +62,7 @@ class DBM(Model, Block):
                hyper-parameters controlling degree of L1-regularization.
         :param l2: same as l1, but for L2 regularization.
         :param l1_inf: same as l1, but the L1 penalty is centered as -\infty instead of 0.
-        :param minres_params: dictionary with keys ['rtol','damp','maxit']
+        :param cg_params: dictionary with keys ['rtol','damp','maxiter']
         :param batch_size: size of positive and negative phase minibatch
         :param computational_bs: batch size used internaly by natural
                gradient to reduce memory consumption
@@ -108,11 +109,6 @@ class DBM(Model, Block):
         self.init_centering()
         self.init_samples()
 
-        # configure input-space (?new pylearn2 feature?)
-        self.input_space = VectorSpace(n_u[0])
-        self.output_space = VectorSpace(n_u[-1])
-        self.force_batch_size = batch_size
-
         # learning rate - implemented as shared parameter for GPU
         self.lr_shrd = sharedX(lr, name='lr_shrd')
         self.lr_mults_it = {}
@@ -128,6 +124,14 @@ class DBM(Model, Block):
         if load_from:
             self.load_parameters(fname=load_from)
 
+        # configure input-space (?new pylearn2 feature?)
+        self.input_space = VectorSpace(n_u[0])
+        self.output_space = VectorSpace(n_u[-1])
+        self.batches_seen = 0                    # incremented on every batch
+        self.examples_seen = 0                   # incremented on every training example
+        self.force_batch_size = batch_size  # force minibatch size
+        self.error_record = []
+ 
         if compile: self.do_theano()
 
     def init_parameters(self):
@@ -245,11 +249,11 @@ class DBM(Model, Block):
         ml_cost.compute_gradients()
         reg_cost = self.get_reg_cost()
         #sp_cost = self.get_sparsity_cost()
-        minres_output = []
+        cg_output = []
         natgrad_updates = {}
         if self.flags['enable_natural']:
             xinit = self.dparams if self.flags['enable_warm_start'] else None
-            minres_output, natgrad_updates = self.get_natural_direction(
+            cg_output, natgrad_updates = self.get_natural_direction(
                     ml_cost, self.nsamples,
                     xinit = xinit,
                     precondition = self.flags.get('precondition',None))
@@ -267,7 +271,7 @@ class DBM(Model, Block):
         learning_updates.update(natgrad_updates)
       
         # build theano function to train on a single minibatch
-        self.batch_train_func = function([], minres_output,
+        self.batch_train_func = function([], cg_output,
                 updates=learning_updates,
                 name='train_rbm_func',
                 profile=0)
@@ -321,6 +325,11 @@ class DBM(Model, Block):
 
         x = dataset.get_batch_design(batch_size, include_labels=False)
         self.learn_mini_batch(x)
+        self.enforce_constraints()
+
+        # accounting...
+        self.examples_seen += self.batch_size
+        self.batches_seen += 1
 
         # modify learning rate multipliers
         for (k, iter) in self.lr_mults_it.iteritems():
@@ -329,8 +338,16 @@ class DBM(Model, Block):
                 self.lr_mults_shrd[k].set_value(iter.value)
                 print 'lr_mults_shrd[%s] = %f' % (k,iter.value)
 
-        self.enforce_constraints()
+        # save to different path each epoch
+        if self.my_save_path and \
+           (self.batches_seen in self.save_at or
+            self.batches_seen % self.save_every == 0):
+            fname = self.my_save_path + '_e%i.pkl' % self.batches_seen
+            print 'Saving to %s ...' % fname,
+            serial.save(fname, self)
+            print 'done'
 
+        return self.batches_seen < self.max_updates
 
     def learn_mini_batch(self, x):
         """
@@ -355,19 +372,13 @@ class DBM(Model, Block):
         ### LOGGING & DEBUGGING ###
         if self.flags['enable_natural'] and self.batches_seen%100 == 0:
             if self.batches_seen == 0:
-                fp = open('minres.log', 'w')
+                fp = open('cg.log', 'w')
             else:
-                fp = open('minres.log', 'a')
+                fp = open('cg.log', 'a')
             fp.write('===================\n')
             fp.write('Batches seen: %i\n' % self.batches_seen)
-            fp.write('flag: %s\n' % minres.msgs[rval[0]])
-            fp.write('niters: %i\n' % rval[1])
-            fp.write('rel_residual: %s\n' % str(rval[2]))
-            fp.write('rel_Aresidual: %s\n' % str(rval[3]))
-            fp.write('Anorm: %s\n' % str(rval[4]))
-            fp.write('Acond: %s\n' % str(rval[5]))
-            fp.write('xnor: %s\n' % str(rval[6]))
-            fp.write('Axnor: %s\n' % str(rval[7]))
+            fp.write('niters: %i\n' % rval[0])
+            fp.write('rk_residual: %s\n' % str(rval[1]))
             fp.write('\n\n')
             fp.close()
 
@@ -632,9 +643,9 @@ class DBM(Model, Block):
         return updates
 
     def get_natural_diag_direction(self, ml_cost, nsamples):
-        damp = self.minres_params['damp']
+        damp = self.cg_params['damp']
         cnsamples = self.center_samples(nsamples)
-        rvals = natural.generic_compute_L_diag(*nsamples)
+        rvals = fisher.compute_L_diag(nsamples)
         for i, param in enumerate(self.params):
             ml_cost.grads[param] *= 1./ (rvals[i] + damp)
 
@@ -642,59 +653,44 @@ class DBM(Model, Block):
                               precondition=None):
         """
         Returns: list
-            See minres documentation for the meaning of each return value.
-            rvals[0]: flag
-            rvals[2]: niters 
-            rvals[3]: rel_residual
-            rvals[4]: rel_Aresidual 
-            rvals[5]: Anorm 
-            rvals[6]: Acond 
-            rvals[7]: xnorm
-            rvals[8]: Axnorm
+            See lincg documentation for the meaning of each return value.
+            rvals[0]: niter
+            rvals[1]: rerr
         """
         assert precondition in [None, 'jacobi']
         cnsamples = self.center_samples(nsamples)
+        neg_energies = T.sum(self.energy(cnsamples))
 
         if self.computational_bs > 0:
-            def Lx_func(*args):
-                Lneg_x = natural.generic_compute_Lx_batches(
-                         cnsamples,
-                         args[:len(self.W)-1],
-                         args[len(self.W)-1:],
-                         self.batch_size,
-                         self.computational_bs)
-                return Lneg_x
+            raise NotImplementedError()
         else:
             def Lx_func(*args):
-                Lneg_x = natural.generic_compute_Lx(
-                        cnsamples,
-                        args[:len(self.W)-1],
-                        args[len(self.W)-1:])
+                Lneg_x = fisher.compute_Lx(
+                        neg_energies,
+                        self.params,
+                        args)
                 return Lneg_x
 
-        Ms = None
+        M = None
         if precondition == 'jacobi':
-            Ldiag_terms = natural.generic_compute_L_diag(nsamples)
-            damp = self.minres_params['damp']
-            Ms = [Ldiag_term + damp for Ldiag_term in Ldiag_terms]
+            M = fisher.compute_L_diag(nsamples, damp=self.cg_params['damp'])
 
-        rvals = minres.minres(
+        rvals = lincg.linear_cg(
                 Lx_func,
                 [ml_cost.grads[param] for param in self.params],
-                rtol = self.minres_params['rtol'],
-                damp = self.minres_params['damp'],
-                maxit = self.minres_params['maxit'],
+                rtol = self.cg_params['rtol'],
+                damp = self.cg_params['damp'],
+                maxiter = self.cg_params['maxiter'],
                 xinit = xinit,
-                Ms = Ms,
-                profile=0)
-
-        newgrads = rvals[0]
+                M = M)
+        [niter, rerr] = rvals[:2]
+        newgrads = rvals[2:]
 
         # Now replace grad with natural gradient.
         for i, param in enumerate(self.params):
             ml_cost.grads[param] = newgrads[i]
         
-        return rvals[1:], self.get_dparam_updates(*newgrads)
+        return [niter, rerr], self.get_dparam_updates(*newgrads)
 
     def switch_to_full_natural(self):
         self.flags['enable_natural'] = True
@@ -730,6 +726,4 @@ class DBM(Model, Block):
             self.monitor.redo_theano()
 
     def __call__(self, v):
-        pass
-
-
+        return T.horizontal_stack(*self.psamples[1:])
