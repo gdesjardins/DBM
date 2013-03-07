@@ -97,7 +97,7 @@ def linear_cg(compute_Ax, b, M=None, xinit = None,
                          name = 'linear_conjugate_gradient',
                          profile=0)
     fxs = outs[-n_params:]
-    return [x[0] for x in fxs] + [outs[0][0], outs[1][0]]
+    return [outs[0][0], outs[1][0]] + [x[0] for x in fxs]
 
 
 def linear_cg_fletcher_reeves(compute_Ax, bs, xinit = None,
