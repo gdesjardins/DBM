@@ -1,71 +1,53 @@
 import copy
 import theano
+import numpy
 from theano import tensor
 from theano.ifelse import ifelse
 from theano.sandbox.scan import scan
 from theano.printing import Print
+floatX = theano.config.floatX
+npy_floatX = getattr(numpy, floatX)
 
-def linear_cg_fletcher_reeves(compute_Gv, bs, xinit = None,
-              rtol = 1e-6, maxit = 1000, damp=0,
-              floatX = None, profile=0):
+
+def linear_cg(compute_Ax, b, M=None, xinit = None,
+              rtol = 1e-16, maxiter = 100000, damp=0., floatX = None):
     """
-    assume all are lists all the time
-    Reference:
-        http://en.wikipedia.org/wiki/Conjugate_gradient_method
-    """
-    n_params = len(bs)
+    Solves the system A x[i] = b[i], for all i.
+    
+    When used as part of a Newton-CG method, b is a list of gradients, where each element of
+    this list represents a gradient for a given parameter type (i.e. weight or bias of a given
+    layer). This method will return a list whose elements approximates A^{-1} b[i], with the
+    precision determined by maxiter or the specified tolerance level. This particular
+    version implements the Polyak-Ribiere flavor of CG.
 
+    Parameters:
+    :param compute_Ax: python function which symbolically computes the matrix-vector product.
+    :param b: list of T.vector, corresponding to A x[i] = b[i]
+    :param M: list of T.vector (same length as b). Each element is used to precondition its
+    corresponding element of the A-diagonal. If [Mi for Mi in M] contains the diagonal elements
+    of A, this will implement Jacobi preconditioning.
+    :param xinit: list of T.vector (same length as b). x[i] is initial guess for A^{-1} b[i].
+    :param rtol: float. CG will stop when the norm of the residual error < rtol.
+    :param maxiter: int. Maximum allowable iterations for CG.
+    :param damp: float. Damping factor, equivalent to adding a term along the diagonal of A.
+    :param floatX: 'float32' or 'float64'.
 
-    def loop(rz_old, *args):
-        ps = args[:n_params]
-        rs = args[n_params:2*n_params]
-        xs = args[2*n_params:]
-        _Aps = compute_Gv(*ps)
-        Aps = [x + damp*y for x,y in zip(_Aps, ps)]
-        alpha = rz_old/sum( (x*y).sum() for x,y in zip(Aps, ps))
-        xs = [x + alpha * p for x,p in zip(xs,ps)]
-        rs = [r - alpha * Ap for r, Ap, in zip(rs, Aps)]
-        rz_new = sum( (r*r).sum() for r in rs)
-        ps = [ r + rz_new/rz_old*p for r,p in zip(rs,ps)]
-        return [rz_new]+ps+rs+xs, \
-                theano.scan_module.until(abs(rz_new) < rtol)
+    Return values:
+    rval[0]: niter, number of iterations run by CG
+    rval[1]: residual error norm.
+    rval[2+i]: approximate value for G^-1 b[i].
 
-    if xinit is None:
-        r0s = bs
-        _x0s = [tensor.unbroadcast(tensor.shape_padleft(tensor.zeros_like(x))) for x in bs]
-    else:
-        init_Gv = compute_Gv(*xinit)
-        r0s = [bs[i] - init_Gv[i] for i in xrange(len(bs))]
-        _x0s = [tensor.unbroadcast(tensor.shape_padleft(xi)) for xi in xinit]
-
-    _p0s = [tensor.unbroadcast(tensor.shape_padleft(x),0) for x in r0s]
-    _r0s = [tensor.unbroadcast(tensor.shape_padleft(x),0) for x in r0s]
-    rz_old = sum( (r*r).sum() for r in r0s)
-    _rz_old = tensor.unbroadcast(tensor.shape_padleft(rz_old),0)
-    outs, updates = scan(loop,
-                         states = [_rz_old] + _p0s + _r0s + _x0s,
-                         n_steps = maxit,
-                         mode = theano.Mode(linker='cvm'),
-                         name = 'linear_conjugate_gradient',
-                         profile=profile)
-    fxs = outs[1+2*n_params:]
-    return [x[0] for x in fxs]
-
-
-def linear_cg_polyak_ribiere(compute_Gv, b, M=None, xinit = None,
-                      rtol = 1e-16, maxit = 100000, floatX = None):
-    """
-    assume all are lists all the time
     Reference:
         http://en.wikipedia.org/wiki/Conjugate_gradient_method
     """
     n_params = len(b)
-    def loop(niter, *args):
+    def loop(niter, rkp_norm, *args):
         pk = args[:n_params]
         rk = args[n_params:2*n_params]
         zk = args[2*n_params:3*n_params]
         xk = args[-n_params:]
-        A_pk = compute_Gv(*pk)
+        A_pk_temp = compute_Ax(*pk)
+        A_pk = [A_pk_temp_ + damp*pk_ for A_pk_temp_, pk_ in zip(A_pk_temp, pk)]
         alphak_num = sum((rk_ * zk_).sum() for rk_, zk_ in zip(rk,zk))
         alphak_denum = sum((A_pk_ * pk_).sum() for A_pk_, pk_ in zip(A_pk, pk))
         alphak = alphak_num / alphak_denum
@@ -85,15 +67,16 @@ def linear_cg_polyak_ribiere(compute_Gv, b, M=None, xinit = None,
         return [niter + 1, rkp1_norm] + pkp1 + rkp1 + zkp1 + xkp1,\
                theano.scan_module.until(abs(rkp1_norm) < rtol)
 
+    # Initialize residual based on xinit
     if xinit is None:
         r0_temp = b
         x0 = [tensor.unbroadcast(tensor.shape_padleft(tensor.zeros_like(b_))) for b_ in b]
     else:
-        init_Gv = compute_Gv(*xinit)
-        r0_temp = [b[i] - init_Gv[i] for i in xrange(len(b))]
+        init_Ax = compute_Ax(*xinit)
+        r0_temp = [b[i] - init_Ax[i] for i in xrange(len(b))]
         x0 = [tensor.unbroadcast(tensor.shape_padleft(xinit_)) for xinit_ in xinit]
 
-    niter0 = tensor.zeros((1,))
+    # Leftpad r0, z0 and p0 for scan.
     r0 = [tensor.unbroadcast(tensor.shape_padleft(r0_temp_)) for r0_temp_ in r0_temp]
     if M:
         z0 = [tensor.unbroadcast(tensor.shape_padleft(r0_temp_ / m_)) for r0_temp_, m_ in zip(r0_temp, M)]
@@ -101,14 +84,66 @@ def linear_cg_polyak_ribiere(compute_Gv, b, M=None, xinit = None,
         z0 = r0
     p0 = z0
 
+    states = []
+    # 0 niter
+    states.append(tensor.constant(npy_floatX([0])))
+    # 1 residual error norm
+    states.append(tensor.constant(npy_floatX([0])))
+ 
     outs, updates = scan(loop,
-                         states = [niter0, None] + p0 + r0 + z0 + x0,
-                         n_steps = maxit,
+                         states = states + p0 + r0 + z0 + x0,
+                         n_steps = maxiter,
                          mode = theano.Mode(linker='c|py'),
                          name = 'linear_conjugate_gradient',
                          profile=0)
     fxs = outs[-n_params:]
-    return [x[0] for x in fxs] + [outs[0], outs[1][-1]]
+    return [x[0] for x in fxs] + [outs[0][0], outs[1][0]]
 
-linear_cg = linear_cg_polyak_ribiere
+
+def linear_cg_fletcher_reeves(compute_Ax, bs, xinit = None,
+              rtol = 1e-6, maxiter = 1000, damp=0,
+              floatX = None, profile=0):
+    """
+    assume all are lists all the time
+    Reference:
+        http://en.wikipedia.org/wiki/Conjugate_gradient_method
+    """
+    n_params = len(bs)
+
+
+    def loop(rz_old, *args):
+        ps = args[:n_params]
+        rs = args[n_params:2*n_params]
+        xs = args[2*n_params:]
+        _Aps = compute_Ax(*ps)
+        Aps = [x + damp*y for x,y in zip(_Aps, ps)]
+        alpha = rz_old/sum( (x*y).sum() for x,y in zip(Aps, ps))
+        xs = [x + alpha * p for x,p in zip(xs,ps)]
+        rs = [r - alpha * Ap for r, Ap, in zip(rs, Aps)]
+        rz_new = sum( (r*r).sum() for r in rs)
+        ps = [ r + rz_new/rz_old*p for r,p in zip(rs,ps)]
+        return [rz_new]+ps+rs+xs, \
+                theano.scan_module.until(abs(rz_new) < rtol)
+
+    if xinit is None:
+        r0s = bs
+        _x0s = [tensor.unbroadcast(tensor.shape_padleft(tensor.zeros_like(x))) for x in bs]
+    else:
+        init_Ax = compute_Ax(*xinit)
+        r0s = [bs[i] - init_Ax[i] for i in xrange(len(bs))]
+        _x0s = [tensor.unbroadcast(tensor.shape_padleft(xi)) for xi in xinit]
+
+    _p0s = [tensor.unbroadcast(tensor.shape_padleft(x),0) for x in r0s]
+    _r0s = [tensor.unbroadcast(tensor.shape_padleft(x),0) for x in r0s]
+    rz_old = sum( (r*r).sum() for r in r0s)
+    _rz_old = tensor.unbroadcast(tensor.shape_padleft(rz_old),0)
+    outs, updates = scan(loop,
+                         states = [_rz_old] + _p0s + _r0s + _x0s,
+                         n_steps = maxiter,
+                         mode = theano.Mode(linker='cvm'),
+                         name = 'linear_conjugate_gradient',
+                         profile=profile)
+    fxs = outs[1+2*n_params:]
+    return [x[0] for x in fxs]
+
 

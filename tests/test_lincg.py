@@ -35,13 +35,81 @@ vals['g'] = rng.rand(nparams).astype(floatX)
 vals['Linv_g'] = linalg.cho_solve(linalg.cho_factor(vals['L']), vals['g'])
 
 
+def test_lincg():
+    rval = lincg.linear_cg(
+            lambda x: [T.dot(symb['L'], x)],
+            [symb['g']],
+            M = None,
+            rtol=1e-10,
+            maxiter = 10000,
+            floatX = floatX)
+
+    f = theano.function([symb['L'], symb['g']], rval)
+    t1 = time.time()
+    [Linv_g, niter, rerr] = f(vals['L'], vals['g'])
+    print 'test_lincg runtime (s):', time.time() - t1
+    print '\t niter = ', niter
+    print '\t residual error = ', rerr
+    numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=5)
+
+
+def test_lincg_xinit():
+    symb['xinit'] = T.vector('xinit')
+    vals['xinit'] = rng.rand(nparams).astype(floatX)
+
+    rval = lincg.linear_cg(
+            lambda x: [T.dot(symb['L'], x)],
+            [symb['g']],
+            M = None,
+            xinit = [symb['xinit']],
+            rtol=1e-10,
+            maxiter = 10000,
+            floatX = floatX)
+
+    f = theano.function([symb['L'], symb['g'], symb['xinit']], rval)
+    t1 = time.time()
+    [Linv_g, niter, rerr] = f(vals['L'], vals['g'], vals['xinit'])
+    print 'test_lincg runtime (s):', time.time() - t1
+    print '\t niter = ', niter
+    print '\t residual error = ', rerr
+    numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=5)
+
+
+def test_lincg_precond():
+    symb['M'] = T.vector('M')
+    vals['M'] = numpy.diag(vals['L'])
+
+    rval = lincg.linear_cg(
+            lambda x: [T.dot(symb['L'], x)],
+            [symb['g']],
+            M = [symb['M']],
+            rtol=1e-10,
+            maxiter = 10000,
+            floatX = floatX)
+
+    f = theano.function([symb['L'], symb['g'], symb['M']], rval)
+    t1 = time.time()
+    [Linv_g, niter, rerr] = f(vals['L'], vals['g'], vals['M'])
+    print 'test_lincg runtime (s):', time.time() - t1
+    print '\t niter = ', niter
+    print '\t residual error = ', rerr
+    numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=5)
+
+    ### test scipy implementation ###
+    from scipy.sparse import linalg
+    t1 = time.time()
+    linalg.cg(vals['L'], vals['g'], maxiter=10000, tol=1e-10)
+    print 'scipy.sparse.linalg.cg (no preconditioning): Elapsed ', time.time() - t1
+    t1 = time.time()
+    linalg.cg(vals['L'], vals['g'], maxiter=10000, tol=1e-10, M=numpy.diag(vals['M']))
+    print 'scipy.sparse.linalg.cg (preconditioning): Elapsed ', time.time() - t1
 def test_lincg_fletcher():
     rval = lincg.linear_cg_fletcher_reeves(
             lambda x: [T.dot(symb['L'], x)],
             [symb['g']],
             rtol=1e-10,
             damp = 0.,
-            maxit = 10000,
+            maxiter = 10000,
             floatX = floatX,
             profile=0)
 
@@ -61,7 +129,7 @@ def test_lincg_fletcher_xinit():
             [symb['g']],
             rtol=1e-10,
             damp = 0.,
-            maxit = 10000,
+            maxiter = 10000,
             floatX = floatX,
             xinit = [symb['xinit']],
             profile=0)
@@ -72,73 +140,3 @@ def test_lincg_fletcher_xinit():
     print 'test_lincg runtime (s):', time.time() - t1
     numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=5)
 
-
-def test_lincg_polyak():
-    rval = lincg.linear_cg_polyak_ribiere(
-            lambda x: [T.dot(symb['L'], x)],
-            [symb['g']],
-            M = None,
-            rtol=1e-10,
-            maxit = 10000,
-            floatX = floatX)
-
-    f = theano.function([symb['L'], symb['g']], rval)
-    t1 = time.time()
-    [Linv_g, niter, rerr] = f(vals['L'], vals['g'])
-    print 'test_lincg_polyak runtime (s):', time.time() - t1
-    print '\t niter = ', niter
-    print '\t residual error = ', rerr
-    numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=5)
-
-
-def test_lincg_polyak_xinit():
-    symb['xinit'] = T.vector('xinit')
-    vals['xinit'] = rng.rand(nparams).astype(floatX)
-
-    rval = lincg.linear_cg_polyak_ribiere(
-            lambda x: [T.dot(symb['L'], x)],
-            [symb['g']],
-            M = None,
-            xinit = [symb['xinit']],
-            rtol=1e-10,
-            maxit = 10000,
-            floatX = floatX)
-
-    f = theano.function([symb['L'], symb['g'], symb['xinit']], rval)
-    t1 = time.time()
-    [Linv_g, niter, rerr] = f(vals['L'], vals['g'], vals['xinit'])
-    print 'test_lincg_polyak runtime (s):', time.time() - t1
-    print '\t niter = ', niter
-    print '\t residual error = ', rerr
-    numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=5)
-
-
-
-def test_lincg_polyak_precond():
-    symb['M'] = T.vector('M')
-    vals['M'] = numpy.diag(vals['L'])
-
-    rval = lincg.linear_cg_polyak_ribiere(
-            lambda x: [T.dot(symb['L'], x)],
-            [symb['g']],
-            M = [symb['M']],
-            rtol=1e-10,
-            maxit = 10000,
-            floatX = floatX)
-
-    f = theano.function([symb['L'], symb['g'], symb['M']], rval)
-    t1 = time.time()
-    [Linv_g, niter, rerr] = f(vals['L'], vals['g'], vals['M'])
-    print 'test_lincg runtime (s):', time.time() - t1
-    print '\t niter = ', niter
-    print '\t residual error = ', rerr
-    numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=5)
-
-    ### test scipy implementation ###
-    from scipy.sparse import linalg
-    t1 = time.time()
-    linalg.cg(vals['L'], vals['g'], maxiter=10000, tol=1e-10)
-    print 'scipy.sparse.linalg.cg (no preconditioning): Elapsed ', time.time() - t1
-    t1 = time.time()
-    linalg.cg(vals['L'], vals['g'], maxiter=10000, tol=1e-10, M=numpy.diag(vals['M']))
-    print 'scipy.sparse.linalg.cg (preconditioning): Elapsed ', time.time() - t1
