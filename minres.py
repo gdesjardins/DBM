@@ -116,7 +116,7 @@ def symGivens2(a,b):
 def minres(compute_Av,
            bs,
            rtol=npy_floatX(1e-6),
-           maxit=20,
+           maxiter=20,
            Ms=None,
            damp=npy_floatX(0.),
            maxxnorm=npy_floatX(1e15),
@@ -138,7 +138,7 @@ def minres(compute_Av,
             A^-1\dot bs
         :param rtol: Optional, real, specifies the tolerance of the method.
             Default is 1e-6
-        :param maxit: Optional, positive integer, specifies the maximum number of
+        :param maxiter: Optional, positive integer, specifies the maximum number of
             iterations. Default is 20
         :param Ms: List of theano expression of same shape as `bs`. The
             method uses these to precondition with diag(Ms)
@@ -163,7 +163,7 @@ def minres(compute_Av,
                 7 Acond has exceeded Acondlim.
                 8 The iteration limit was reached.
                 9 It is a least squares problem but no converged solution yet.
-        iter    integer, iteration number at which x was computed: 0 <= iter <= maxit.
+        iter    integer, iteration number at which x was computed: 0 <= iter <= maxiter.
         relres  real positive, the relative residual is defined as
                      NORM(b-A*x)/(NORM(A) * NORM(x) + NORM(b)),
                 computed recurrently here.  If flag is 1 or 3,  relres <= TOL.
@@ -177,8 +177,8 @@ def minres(compute_Av,
 
     EXAMPLE 1:
          n = 100; on = ones(n,1); A = spdiags([-2*on 4*on -2*on],-1:1,n,n);
-         b = sum(A,2); rtol = 1e-10; maxit = 50; M = spdiags(4*on,0,n,n);
-         x = minresSOL69(A, b, rtol, maxit, M);
+         b = sum(A,2); rtol = 1e-10; maxiter = 50; M = spdiags(4*on,0,n,n);
+         x = minresSOL69(A, b, rtol, maxiter, M);
 
          Use this matrix-vector product function
             function y = afun(x,n)
@@ -186,7 +186,7 @@ def minres(compute_Av,
             y(2:n) = y(2:n) - 2 * x(1:n-1);
             y(1:n-1) = y(1:n-1) - 2 * x(2:n);
          as input to minresSOL69
-            x1 = minresSOL69(@afun, b, rtol, maxit, M);
+            x1 = minresSOL69(@afun, b, rtol, maxiter, M);
 
      EXAMPLE 2: A is Laplacian on a 50 by 05 grid, singular and indefinite.
           n = 50; N = n^2; on=ones(n,1);   B = spdiags([on on on], -1:1, n, n);
@@ -426,7 +426,7 @@ def minres(compute_Av,
                                 npy_floatX(5.),
                       TT.switch(TT.ge(xnorm, maxxnorm),
                                 npy_floatX(6.),
-                      TT.switch(TT.ge(niter, TT.cast(maxit,floatX)),
+                      TT.switch(TT.ge(niter, TT.cast(maxiter,floatX)),
                                 npy_floatX(8.),
                                 flag)))))))),
             flag)
@@ -513,7 +513,7 @@ def minres(compute_Av,
 
     rvals, lupds = scan(loop,
                     states = states + xs + r1s + r2s + r3s + dls + ds,
-                    n_steps = maxit + numpy.int32(1),
+                    n_steps = maxiter + numpy.int32(1),
                     name='minres',
                     profile=profile,
                     mode=mode)
@@ -542,7 +542,7 @@ def test_1():
     b = A.sum(axis=1)
     x0 = numpy.random.uniform(size=(n,))*.1 + .5
     rtol=npy_floatX(1e-10)
-    maxit = 50
+    maxiter = 50
     M = numpy.ones((n,), dtype=floatX)*4.
     tA = theano.shared(A.astype(floatX))
     tx0 = theano.shared(x0.astype(floatX))
@@ -550,7 +550,7 @@ def test_1():
     tM = theano.shared(M.astype(floatX))
     compute_Av = lambda x : [TT.dot(tA,x)]
     xs, flag, iters, relres, relAres, Anorm, Acond, xnorm, Axnorm = \
-            minres(compute_Av, [tb], rtol = rtol, maxit = maxit,
+            minres(compute_Av, [tb], rtol = rtol, maxiter = maxiter,
                    xinit = [tx0],
                    Ms = [tM], profile=0)
 
@@ -589,12 +589,12 @@ def test_2():
     b = numpy.ones((n,), dtype=floatX)
     rtol=npy_floatX(1e-6)
     maxxnorm = 1e8
-    maxit = 50
+    maxiter = 50
     tA = theano.shared(A.astype(floatX))
     tb = theano.shared(b.astype(floatX))
     compute_Av = lambda x : [TT.dot(tA,x)]
     xs, flag, iters, relres, relAres, Anorm, Acond, xnorm, Axnorm = \
-            minres(compute_Av, [tb], rtol = rtol, maxit = maxit,
+            minres(compute_Av, [tb], rtol = rtol, maxiter = maxiter,
                    maxxnorm=maxxnorm, profile=0)
 
     func = theano.function([],
