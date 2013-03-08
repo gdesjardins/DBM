@@ -45,6 +45,7 @@ import logging
 import optparse
 import time
 import pickle
+from collections import OrderedDict
 
 import theano
 import theano.tensor as T
@@ -337,7 +338,7 @@ def estimate_likelihood(model, trainset, testset, large_ais=False,
     pa_bias = -numpy.log(1./mean_pos[0] - 1.)
 
     # Build Theano function to sample from interpolating distributions.
-    updates = {}
+    updates = OrderedDict()
     new_nsamples = neg_sampling(model, model.nsamples, beta=beta,
                                 pa_bias=pa_bias,
                                 marginalize_odd = marginalize_odd,
