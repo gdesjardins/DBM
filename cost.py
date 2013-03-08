@@ -2,6 +2,7 @@ import numpy
 import theano
 import theano.tensor as T
 from theano.printing import Print
+from collections import OrderedDict
 from DBM import sharedX
 floatX = theano.config.floatX
 
@@ -9,14 +10,14 @@ class Cost():
 
     def __init__(self, cost, params, constants=None):
         self.cost = cost
-        self.grads = {}
+        self.grads = OrderedDict()
         self.computed_cost = False
 
-        self.params = {}
+        self.params = OrderedDict()
         for p in params:
             self.params[p] = True
 
-        self.constants = {}
+        self.constants = OrderedDict()
         constants = [] if constants is None else constants
         for c in constants:
             self.constants[c] = True
@@ -35,7 +36,7 @@ def compute_gradients(*costs):
     :param args: variable number of grads dictionary
     """
 
-    rval = {}
+    rval = OrderedDict()
     for cost in costs:
         if not cost.computed_cost:
             cost.compute_gradients()
@@ -62,9 +63,9 @@ class StalinGrad():
         self.mov_avg = mov_avg
         self.eps = eps
         # for each param, stores the moving average of E[x]^2
-        self.avg2_x = {}
+        self.avg2_x = OrderedDict()
         # for each param, stores the moving average of E[x^2]
-        self.avg_x2 = {}
+        self.avg_x2 = OrderedDict()
 
     def scale(self, grads):
         """
@@ -72,7 +73,7 @@ class StalinGrad():
         :rval scaled_grad: gradient scaled by inverse variance
         :rval updates: updates dictionary to locally defined shared variables.
         """
-        updates = {}
+        updates = OrderedDict()
         for (param,grad) in grads.iteritems():
             assert isinstance(param, T.sharedvar.TensorSharedVariable)
             pval = param.get_value()
@@ -106,9 +107,9 @@ def get_updates(grads, lr, fast_lr=None, multipliers=None, momentum_lambda=None)
                         e.g. {'hbias': sharedX(0.1), 'Wf': sharedX(0.01)}
     """
 
-    updates = {}
-    momentum = {}
-    multipliers = {} if multipliers is None else multipliers
+    updates = OrderedDict()
+    momentum = OrderedDict()
+    multipliers = OrderedDict() if multipliers is None else multipliers
 
     for (param, gparam) in grads.iteritems():
 
