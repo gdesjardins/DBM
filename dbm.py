@@ -2,6 +2,7 @@ import os
 import numpy
 import pickle
 import time
+from collections import OrderedDict
 from scipy import stats
 
 import theano
@@ -202,7 +203,8 @@ class DBM(Model, Block):
             self.nsamples += [sharedX(self.rng.rand(self.batch_size, nui), name='nsamples%i'%i)]
 
     def setup_pos(self):
-        updates = {self.psamples[0]: self.input}
+        updates = OrderedDict()
+        updates[self.psamples[0]] = self.input
         for i in xrange(1, self.depth):
             layer_init = T.ones((self.input.shape[0], self.n_u[i])) * self.offset[i]
             updates[self.psamples[i]] = layer_init
@@ -236,7 +238,7 @@ class DBM(Model, Block):
         ###
         new_nsamples = self.neg_sampling(self.nsamples)
         new_ev = self.hi_given(new_nsamples, 0)
-        neg_updates = {}
+        neg_updates = OrderedDict()
         for (nsample, new_nsample) in zip(self.nsamples, new_nsamples):
             neg_updates[nsample] = new_nsample
         self.sample_neg_func = function([], [], updates=neg_updates,
@@ -250,7 +252,7 @@ class DBM(Model, Block):
         reg_cost = self.get_reg_cost()
         #sp_cost = self.get_sparsity_cost()
         cg_output = []
-        natgrad_updates = {}
+        natgrad_updates = OrderedDict()
         if self.flags['enable_natural']:
             xinit = self.dparams if self.flags['enable_warm_start'] else None
             cg_output, natgrad_updates = self.get_natural_direction(
@@ -279,7 +281,7 @@ class DBM(Model, Block):
         ##
         # CONSTRAINTS
         ##
-        constraint_updates = {}
+        constraint_updates = OrderedDict()
 
         ## clip parameters to maximum values (if applicable)
         for (k,v) in self.clip_max.iteritems():
@@ -371,15 +373,9 @@ class DBM(Model, Block):
 
         ### LOGGING & DEBUGGING ###
         if self.flags['enable_natural'] and self.batches_seen%100 == 0:
-            if self.batches_seen == 0:
-                fp = open('cg.log', 'w')
-            else:
-                fp = open('cg.log', 'a')
-            fp.write('===================\n')
-            fp.write('Batches seen: %i\n' % self.batches_seen)
-            fp.write('niters: %i\n' % rval[0])
-            fp.write('rk_residual: %s\n' % str(rval[1]))
-            fp.write('\n\n')
+            fp = open('cg.log', 'a' if self.batches_seen else 'w')
+            fp.write('Batches: %i\t niters:%i\t rk_res:%s\t mcos_dist=%s\n' %
+                     (self.batches_seen, rval[0], str(rval[1]), str(rval[2])))
             fp.close()
 
     def center_samples(self, samples):
@@ -513,7 +509,7 @@ class DBM(Model, Block):
         return [x[0] for x in new_psamples]
 
     def e_step_updates(self, new_psamples):
-        updates = {}
+        updates = OrderedDict()
         for (new_psample, psample) in zip(new_psamples, self.psamples):
             updates[psample] = new_psample
         return updates
@@ -633,7 +629,7 @@ class DBM(Model, Block):
         return utils_cost.Cost(cost, params)
 
     def get_dparam_updates(self, *deltas):
-        updates = {}
+        updates = OrderedDict()
         if self.flags['enable_warm_start']:
             updates[self.dW[1]] = deltas[0]
             updates[self.dW[2]] = deltas[1]
@@ -659,7 +655,7 @@ class DBM(Model, Block):
         """
         assert precondition in [None, 'jacobi']
         cnsamples = self.center_samples(nsamples)
-        neg_energies = T.sum(self.energy(cnsamples))
+        neg_energies = self.energy(cnsamples)
 
         if self.computational_bs > 0:
             raise NotImplementedError()
@@ -687,10 +683,18 @@ class DBM(Model, Block):
         newgrads = rvals[2:]
 
         # Now replace grad with natural gradient.
+        cos_dist  = 0.
+        norm2_old = 0.
+        norm2_new = 0.
         for i, param in enumerate(self.params):
+            norm2_old += T.sum(ml_cost.grads[param]**2)
+            norm2_new += T.sum(newgrads[i]**2)
+            cos_dist += T.dot(ml_cost.grads[param].flatten(),
+                              newgrads[i].flatten())
             ml_cost.grads[param] = newgrads[i]
+        cos_dist /= (norm2_old * norm2_new)
         
-        return [niter, rerr], self.get_dparam_updates(*newgrads)
+        return [niter, rerr, cos_dist], self.get_dparam_updates(*newgrads)
 
     def switch_to_full_natural(self):
         self.flags['enable_natural'] = True
