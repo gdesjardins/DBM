@@ -96,8 +96,10 @@ def linear_cg(compute_Ax, b, M=None, xinit = None,
                          mode = theano.Mode(linker='c|py'),
                          name = 'linear_conjugate_gradient',
                          profile=0)
-    fxs = outs[-n_params:]
-    return [outs[0][0], outs[1][0]] + [x[0] for x in fxs]
+    sol = [x[0] for x in outs[-n_params:]]
+    niter = outs[0][0]
+    rerr = outs[1][0]
+    return [sol, niter, rerr]
 
 
 def linear_cg_fletcher_reeves(compute_Ax, bs, xinit = None,

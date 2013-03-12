@@ -36,7 +36,7 @@ vals['Linv_g'] = linalg.cho_solve(linalg.cho_factor(vals['L']), vals['g'])
 
 
 def test_lincg():
-    rval = lincg.linear_cg(
+    [sol, niter, rerr] = lincg.linear_cg(
             lambda x: [T.dot(symb['L'], x)],
             [symb['g']],
             M = None,
@@ -44,7 +44,7 @@ def test_lincg():
             maxiter = 10000,
             floatX = floatX)
 
-    f = theano.function([symb['L'], symb['g']], rval)
+    f = theano.function([symb['L'], symb['g']], sol + [niter, rerr])
     t1 = time.time()
     [Linv_g, niter, rerr] = f(vals['L'], vals['g'])
     print 'test_lincg runtime (s):', time.time() - t1
@@ -57,7 +57,7 @@ def test_lincg_xinit():
     symb['xinit'] = T.vector('xinit')
     vals['xinit'] = rng.rand(nparams).astype(floatX)
 
-    rval = lincg.linear_cg(
+    [sol, niter, rerr] = lincg.linear_cg(
             lambda x: [T.dot(symb['L'], x)],
             [symb['g']],
             M = None,
@@ -66,7 +66,7 @@ def test_lincg_xinit():
             maxiter = 10000,
             floatX = floatX)
 
-    f = theano.function([symb['L'], symb['g'], symb['xinit']], rval)
+    f = theano.function([symb['L'], symb['g'], symb['xinit']], sol + [niter, rerr])
     t1 = time.time()
     [Linv_g, niter, rerr] = f(vals['L'], vals['g'], vals['xinit'])
     print 'test_lincg runtime (s):', time.time() - t1
@@ -79,7 +79,7 @@ def test_lincg_precond():
     symb['M'] = T.vector('M')
     vals['M'] = numpy.diag(vals['L'])
 
-    rval = lincg.linear_cg(
+    [sol, niter, rerr] = lincg.linear_cg(
             lambda x: [T.dot(symb['L'], x)],
             [symb['g']],
             M = [symb['M']],
@@ -87,7 +87,7 @@ def test_lincg_precond():
             maxiter = 10000,
             floatX = floatX)
 
-    f = theano.function([symb['L'], symb['g'], symb['M']], rval)
+    f = theano.function([symb['L'], symb['g'], symb['M']], sol + [niter, rerr])
     t1 = time.time()
     [Linv_g, niter, rerr] = f(vals['L'], vals['g'], vals['M'])
     print 'test_lincg runtime (s):', time.time() - t1
@@ -103,6 +103,8 @@ def test_lincg_precond():
     t1 = time.time()
     linalg.cg(vals['L'], vals['g'], maxiter=10000, tol=1e-10, M=numpy.diag(vals['M']))
     print 'scipy.sparse.linalg.cg (preconditioning): Elapsed ', time.time() - t1
+
+
 def test_lincg_fletcher():
     rval = lincg.linear_cg_fletcher_reeves(
             lambda x: [T.dot(symb['L'], x)],
