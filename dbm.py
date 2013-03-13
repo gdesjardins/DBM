@@ -21,10 +21,12 @@ from pylearn2.space import VectorSpace
 from DBM import tools
 from DBM import cost as utils_cost
 from DBM import lincg
+from DBM import minres
 from DBM import natural
 from DBM import fisher
 from DBM import utils
 from DBM import sharedX, floatX, npy_floatX
+from theano_optimize import minresQLP
 
 class DBM(Model, Block):
     """Bilinear Restricted Boltzmann Machine (RBM)  """
@@ -33,7 +35,7 @@ class DBM(Model, Block):
             iscales=None, clip_min={}, clip_max={},
             pos_mf_steps=1, pos_sample_steps=0, neg_sample_steps=1, 
             lr = 1e-3, lr_anneal_coeff=0, lr_timestamp=None, lr_mults = {},
-            l1 = {}, l2 = {}, l1_inf={}, flags={},
+            l1 = {}, l2 = {}, l1_inf={}, flags={}, momentum_lambda=0,
             cg_params = {},
             batch_size = 13,
             computational_bs = 0,
@@ -85,6 +87,8 @@ class DBM(Model, Block):
         flags.setdefault('enable_warm_start', False)
         flags.setdefault('mlbiases', False)
         flags.setdefault('precondition', None)
+        flags.setdefault('minres', False)
+        flags.setdefault('minresQLP', False)
         if flags['precondition'] == 'None': flags['precondition'] = None
        
         self.jobman_channel = None
@@ -248,7 +252,7 @@ class DBM(Model, Block):
         # SML LEARNING
         ###
         ml_cost = self.ml_cost(self.psamples, self.nsamples)
-        ml_cost.compute_gradients()
+        mom_updates = ml_cost.compute_gradients(self.momentum_lambda)
         reg_cost = self.get_reg_cost()
         #sp_cost = self.get_sparsity_cost()
         cg_output = []
@@ -260,7 +264,7 @@ class DBM(Model, Block):
                     xinit = xinit,
                     precondition = self.flags.get('precondition',None))
         elif self.flags['enable_natural_diag']:
-            self.get_natural_diag_direction(ml_cost, self.nsamples)
+            cg_output, natgrad_updates = self.get_natural_diag_direction(ml_cost, self.nsamples)
         learning_grads = utils_cost.compute_gradients(ml_cost, reg_cost)
 
         ##
@@ -271,6 +275,7 @@ class DBM(Model, Block):
                 self.lr_shrd,
                 multipliers = self.lr_mults_shrd) 
         learning_updates.update(natgrad_updates)
+        learning_updates.update(mom_updates)
       
         # build theano function to train on a single minibatch
         self.batch_train_func = function([], cg_output,
@@ -372,7 +377,7 @@ class DBM(Model, Block):
         self.cpu_time += time.time() - t1
 
         ### LOGGING & DEBUGGING ###
-        if self.flags['enable_natural'] and self.batches_seen%100 == 0:
+        if len(rval) and self.batches_seen%100 == 0:
             fp = open('cg.log', 'a' if self.batches_seen else 'w')
             fp.write('Batches: %i\t niters:%i\t rk_res:%s\t mcos_dist=%s\n' %
                      (self.batches_seen, rval[0], str(rval[1]), str(rval[2])))
@@ -384,7 +389,7 @@ class DBM(Model, Block):
         else:
             return samples
 
-    def energy(self, samples, beta=1.0):
+    def energy(self, samples, beta=1.0, alpha=0.):
         """
         Computes energy for a given configuration of visible and hidden units.
         :param samples: list of T.matrix of shape (batch_size, n_u[i])
@@ -641,9 +646,21 @@ class DBM(Model, Block):
     def get_natural_diag_direction(self, ml_cost, nsamples):
         damp = self.cg_params['damp']
         cnsamples = self.center_samples(nsamples)
-        rvals = fisher.compute_L_diag(nsamples)
+        rvals = fisher.compute_L_diag(cnsamples)
+
+        # keep track of cosine similarity
+        cos_dist  = 0.
+        norm2_old = 0.
+        norm2_new = 0.
         for i, param in enumerate(self.params):
-            ml_cost.grads[param] *= 1./ (rvals[i] + damp)
+            new_gradi = ml_cost.grads[param] * 1./(rvals[i] + damp)
+            norm2_old += T.sum(ml_cost.grads[param]**2)
+            norm2_new += T.sum(new_gradi**2)
+            cos_dist += T.dot(ml_cost.grads[param].flatten(), new_gradi.flatten())
+            ml_cost.grads[param] = new_gradi
+        cos_dist /= (norm2_old * norm2_new)
+
+        return [T.constant(1), T.constant(0), cos_dist], OrderedDict()
 
     def get_natural_direction(self, ml_cost, nsamples, xinit=None,
                               precondition=None):
@@ -654,8 +671,7 @@ class DBM(Model, Block):
             rvals[1]: rerr
         """
         assert precondition in [None, 'jacobi']
-        cnsamples = self.center_samples(nsamples)
-        neg_energies = self.energy(cnsamples)
+        neg_energies = self.energy(nsamples)
 
         if self.computational_bs > 0:
             raise NotImplementedError()
@@ -665,22 +681,50 @@ class DBM(Model, Block):
                         neg_energies,
                         self.params,
                         args)
-                return Lneg_x
+                if self.flags['minresQLP']:
+                    return Lneg_x, {}
+                else:
+                    return Lneg_x
 
         M = None
         if precondition == 'jacobi':
-            M = fisher.compute_L_diag(nsamples, damp=self.cg_params['damp'])
+            cnsamples = self.center_samples(nsamples)
+            raw_M = fisher.compute_L_diag(cnsamples)
+            M = [1./(Mi + self.cg_params['damp']) for Mi in raw_M]
 
-        rvals = lincg.linear_cg(
-                Lx_func,
-                [ml_cost.grads[param] for param in self.params],
-                rtol = self.cg_params['rtol'],
-                damp = self.cg_params['damp'],
-                maxiter = self.cg_params['maxiter'],
-                xinit = xinit,
-                M = M)
-        [niter, rerr] = rvals[:2]
-        newgrads = rvals[2:]
+        if self.flags['minres']:
+            rvals = minres.minres(
+                    Lx_func,
+                    [ml_cost.grads[param] for param in self.params],
+                    rtol = self.cg_params['rtol'],
+                    maxiter = self.cg_params['maxiter'],
+                    damp = self.cg_params['damp'],
+                    xinit = xinit,
+                    Ms = M)
+            [newgrads, flag, niter, rerr] = rvals[:4]
+        elif self.flags['minresQLP']:
+            param_shapes = []
+            for p in self.params:
+                param_shapes += [p.get_value().shape]
+            rvals = minresQLP.minresQLP(
+                    Lx_func,
+                    [ml_cost.grads[param] for param in self.params],
+                    param_shapes,
+                    rtol = self.cg_params['rtol'],
+                    maxit = self.cg_params['maxiter'],
+                    damp = self.cg_params['damp'],
+                    Ms = M)
+            [newgrads, flag, niter, rerr] = rvals[:4]
+        else:
+            rvals = lincg.linear_cg(
+                    Lx_func,
+                    [ml_cost.grads[param] for param in self.params],
+                    rtol = self.cg_params['rtol'],
+                    damp = self.cg_params['damp'],
+                    maxiter = self.cg_params['maxiter'],
+                    xinit = xinit,
+                    M = M)
+            [newgrads, niter, rerr] = rvals
 
         # Now replace grad with natural gradient.
         cos_dist  = 0.
