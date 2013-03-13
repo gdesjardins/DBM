@@ -1,20 +1,23 @@
 import numpy
+import time
 import theano
 import theano.tensor as T
 from scipy import linalg
 floatX = theano.config.floatX
+npy_floatX = getattr(numpy, floatX)
 
 from DBM import natural
 from DBM import minres
 from DBM import lincg
 
 rng = numpy.random.RandomState(92832)
-(M,N0,N1,N2) = (256,3,4,5)
-v = rng.randint(low=0, high=2, size=(M,N0)).astype('float32')
-g = rng.randint(low=0, high=2, size=(M,N1)).astype('float32')
-h = rng.randint(low=0, high=2, size=(M,N2)).astype('float32')
-xw_mat = (numpy.dot(v.T, g) / M).astype('float32')
-xv_mat = (numpy.dot(g.T, h) / M).astype('float32')
+(M,N0,N1,N2) = (1024,10,11,12)
+
+v = rng.randint(low=0, high=2, size=(M,N0)).astype(floatX)
+g = rng.randint(low=0, high=2, size=(M,N1)).astype(floatX)
+h = rng.randint(low=0, high=2, size=(M,N2)).astype(floatX)
+xw_mat = (numpy.dot(v.T, g) / M).astype(floatX)
+xv_mat = (numpy.dot(g.T, h) / M).astype(floatX)
 xw = xw_mat.flatten()
 xv = xv_mat.flatten()
 xa = numpy.mean(v, axis=0)
@@ -63,8 +66,8 @@ La = numpy.sum(v, axis=0)
 Lb = numpy.sum(g, axis=0)
 Lc = numpy.sum(h, axis=0)
 
-Minv = numpy.float32(1./M)
-M2inv = numpy.float32(1./M**2)
+Minv = npy_floatX(1./M)
+M2inv = npy_floatX(1./M**2)
 
 L1 = numpy.vstack((
         numpy.hstack((Lww, Lwv, Lwa, Lwb, Lwc)),
@@ -93,7 +96,6 @@ Linv_x_v = Linv_x[N0*N1 : N0*N1 + N1*N2].reshape(N1,N2)
 Linv_x_a = Linv_x[N0*N1 + N1*N2 : N0*N1 + N1*N2 + N0]
 Linv_x_b = Linv_x[N0*N1 + N1*N2 + N0 : N0*N1 + N1*N2 + N0 + N1]
 Linv_x_c = Linv_x[-N2:]
-
 
 def test_compute_Lx_batches():
 
@@ -142,7 +144,9 @@ def test_compute_Lx():
 
     # test compute_Lx
     LLx = natural.compute_Lx(vv, gg, hh, xxw_mat, xxv_mat, xxa, xxb, xxc)
+    t1 = time.time()
     f = theano.function([vv, gg, hh, xxw_mat, xxv_mat, xxa, xxb, xxc], LLx)
+    print 'Elapsed: ', time.time() - t1
     rvals = f(v, g, h, xw_mat, xv_mat, xa, xb, xc)
     numpy.testing.assert_almost_equal(Lx_w, rvals[0], decimal=3)
     numpy.testing.assert_almost_equal(Lx_v, rvals[1], decimal=3)
@@ -173,7 +177,9 @@ def test_generic_compute_Lx_batches():
                                              [xxa, xxb, xxc],
                                              256, 64)
     f = theano.function([vv, gg, hh, xxw_mat, xxv_mat, xxa, xxb, xxc], LLx)
+    t1 = time.time()
     rvals = f(v, g, h, xw_mat, xv_mat, xa, xb, xc)
+    print 'Elapsed: ', time.time() - t1
     numpy.testing.assert_almost_equal(Lx_w, rvals[0], decimal=3)
     numpy.testing.assert_almost_equal(Lx_v, rvals[1], decimal=3)
     numpy.testing.assert_almost_equal(Lx_a, rvals[2], decimal=3)
@@ -202,12 +208,15 @@ def test_generic_compute_Lx():
                                      [xxw_mat, xxv_mat],
                                      [xxa, xxb, xxc])
     f = theano.function([vv, gg, hh, xxw_mat, xxv_mat, xxa, xxb, xxc], LLx)
+    t1 = time.time()
     rvals = f(v, g, h, xw_mat, xv_mat, xa, xb, xc)
+    print 'Elapsed: ', time.time() - t1
     numpy.testing.assert_almost_equal(Lx_w, rvals[0], decimal=3)
     numpy.testing.assert_almost_equal(Lx_v, rvals[1], decimal=3)
     numpy.testing.assert_almost_equal(Lx_a, rvals[2], decimal=3)
     numpy.testing.assert_almost_equal(Lx_b, rvals[3], decimal=3)
     numpy.testing.assert_almost_equal(Lx_c, rvals[4], decimal=3)
+
 
 def test_math():
     """
@@ -506,7 +515,7 @@ def test_minres():
             [dw, dv, da, db, dc],
             rtol=1e-5,
             damp = 0.,
-            maxit = 30,
+            maxiter = 10000,
             profile=0)[0]
 
     f = theano.function([], newgrads)
@@ -535,14 +544,14 @@ def test_minres_with_xinit():
               rng.rand(N0),
               rng.rand(N1),
               rng.rand(N2)]
-    xinit = [xi.astype('float32') for xi in xinit]
+    xinit = [xi.astype(floatX) for xi in xinit]
 
     newgrads = minres.minres(
             lambda xw, xv, xa, xb, xc: natural.compute_Lx(vv,gg,hh,xw,xv,xa,xb,xc),
             [dw, dv, da, db, dc],
             rtol=1e-5,
             damp = 0.,
-            maxit = 30,
+            maxiter = 10000,
             xinit = xinit,
             profile=0)[0]
 
@@ -573,7 +582,7 @@ def test_minres_with_jacobi():
             [dw, dv, da, db, dc],
             rtol=1e-5,
             damp = 0.,
-            maxit = 30,
+            maxiter = 10000,
             Ms = Ms,
             profile=0)[0]
 
@@ -600,7 +609,7 @@ def test_linearcg():
             lambda xw, xv, xa, xb, xc: natural.compute_Lx(vv,gg,hh,xw,xv,xa,xb,xc),
             [dw, dv, da, db, dc],
             rtol=1e-5,
-            maxit = 30,
+            maxiter = 30,
             damp = 0.,
             floatX = floatX,
             profile=0)

@@ -28,9 +28,9 @@ def test_minres():
     rval = minres.minres(
             lambda x: [T.dot(symb['L'], x)],
             [symb['g']],
-            rtol=1e-10,
+            rtol=1e-20,
             damp = 0.,
-            maxit = 10000,
+            maxiter = 10000,
             profile=0)
 
     f = theano.function([symb['L'], symb['g']], [rval[0][0], rval[1], rval[2]])
@@ -47,9 +47,9 @@ def test_minres_xinit():
     symb_Linv_g = minres.minres(
             lambda x: [T.dot(symb['L'], x)],
             [symb['g']],
-            rtol=1e-10,
+            rtol=1e-20,
             damp = 0.,
-            maxit = 10000,
+            maxiter = 10000,
             xinit = [symb['xinit']],
             profile=0)[0]
 
