@@ -22,13 +22,26 @@ class Cost():
         for c in constants:
             self.constants[c] = True
 
-    def compute_gradients(self):
+    def compute_gradients(self, momentum_lambda=None):
+        updates = OrderedDict()
+        momentum = OrderedDict()
+
         grads =  T.grad(self.cost, self.params.keys(), 
                         consider_constant=self.constants.keys(),
                         disconnected_inputs='ignore')
         for param, gparam in zip(self.params.keys(), grads):
-            self.grads[param] = gparam
+
+            if momentum_lambda:
+                momentum[param] = sharedX(numpy.zeros_like(param.get_value()), name=param.name + '_mom')
+                new_grad = momentum_lambda * momentum[param] + (1.-momentum_lambda) * gparam
+                updates[momentum[param]] = new_grad
+            else:
+                new_grad = gparam
+
+            self.grads[param] = new_grad
+
         self.computed_cost = True
+        return updates
 
 
 def compute_gradients(*costs):
