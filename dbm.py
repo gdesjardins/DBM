@@ -34,7 +34,7 @@ class DBM(Model, Block):
     def __init__(self, input = None, n_u=[100,100], enable={}, load_from=None,
             iscales=None, clip_min={}, clip_max={},
             pos_mf_steps=1, pos_sample_steps=0, neg_sample_steps=1, 
-            lr = 1e-3, lr_anneal_coeff=0, lr_timestamp=None, lr_mults = {},
+            lr_spec={}, lr_mults = {},
             l1 = {}, l2 = {}, l1_inf={}, flags={}, momentum_lambda=0,
             cg_params = {},
             batch_size = 13,
@@ -53,8 +53,6 @@ class DBM(Model, Block):
         :param pos_mf_steps: number of mean-field iterations to perform in positive phase
         :param neg_sample_steps: number of sampling updates to perform in negative phase.
         :param lr: base learning rate
-        :param lr_anneal_coeff: float. 0 for constant learning rate. Other values will anneal
-        :      learning rate with profile: lr / (1 + lr_anneal_coeff * batch_index)
         :param lr_timestamp: list containing update indices at which to change the lr multiplier
         :param lr_mults: dictionary, optionally containing a list of learning rate multipliers
                for parameters of the model. Length of this list should match length of
@@ -78,6 +76,7 @@ class DBM(Model, Block):
         Model.__init__(self)
         Block.__init__(self)
         ### VALIDATE PARAMETERS AND SET DEFAULT VALUES ###
+        assert lr_spec is not None
         for (k,v) in clip_min.iteritems(): clip_min[k] = npy_floatX(v)
         for (k,v) in clip_max.iteritems(): clip_max[k] = npy_floatX(v)
         [iscales.setdefault('bias%i' % i, 0.) for i in xrange(len(n_u))]
@@ -114,14 +113,19 @@ class DBM(Model, Block):
         self.init_centering()
         self.init_samples()
 
-        # learning rate - implemented as shared parameter for GPU
-        self.lr_shrd = sharedX(lr, name='lr_shrd')
-        self.lr_mults_it = {}
-        self.lr_mults_shrd = {}
-        for (k,v) in lr_mults.iteritems():
-            # make sure all learning rate multipliers are float64
-            self.lr_mults_it[k] = tools.HyperParamIterator(lr_timestamp, lr_mults[k])
-            self.lr_mults_shrd[k] = sharedX(self.lr_mults_it[k].value, name='lr_mults_shrd'+k)
+        # learning rate, with deferred 1./t annealing
+        self.iter = sharedX(0.0, name='iter')
+
+        if lr_spec['type'] == 'anneal':
+            num = lr_spec['init'] * lr_spec['start'] 
+            denum = T.maximum(lr_spec['start'], lr_spec['slope'] * self.iter)
+            self.lr = T.maximum(lr_spec['floor'], num/denum) 
+        elif lr_spec['type'] == 'linear':
+            lr_start = npy_floatX(lr_spec['start'])
+            lr_end   = npy_floatX(lr_spec['end'])
+            self.lr = lr_start + self.iter * (lr_end - lr_start) / npy_floatX(self.max_updates)
+        else:
+            raise ValueError('Incorrect value for lr_spec[type]')
 
         # counter for CPU-time
         self.cpu_time = 0.
@@ -252,7 +256,7 @@ class DBM(Model, Block):
         # SML LEARNING
         ###
         ml_cost = self.ml_cost(self.psamples, self.nsamples)
-        mom_updates = ml_cost.compute_gradients(self.momentum_lambda)
+        mom_updates = ml_cost.compute_gradients()
         reg_cost = self.get_reg_cost()
         #sp_cost = self.get_sparsity_cost()
         cg_output = []
@@ -272,10 +276,12 @@ class DBM(Model, Block):
         ##
         learning_updates = utils_cost.get_updates(             
                 learning_grads,
-                self.lr_shrd,
-                multipliers = self.lr_mults_shrd) 
+                self.lr,
+                multipliers = self.lr_mults,
+                momentum_lambda = self.momentum_lambda) 
         learning_updates.update(natgrad_updates)
         learning_updates.update(mom_updates)
+        learning_updates.update({self.iter: self.iter+1})
       
         # build theano function to train on a single minibatch
         self.batch_train_func = function([], cg_output,
@@ -338,13 +344,6 @@ class DBM(Model, Block):
         self.examples_seen += self.batch_size
         self.batches_seen += 1
 
-        # modify learning rate multipliers
-        for (k, iter) in self.lr_mults_it.iteritems():
-            if iter.next():
-                print 'self.batches_seen = ', self.batches_seen
-                self.lr_mults_shrd[k].set_value(iter.value)
-                print 'lr_mults_shrd[%s] = %f' % (k,iter.value)
-
         # save to different path each epoch
         if self.my_save_path and \
            (self.batches_seen in self.save_at or
@@ -363,10 +362,6 @@ class DBM(Model, Block):
         of gradient descent.
         :param x: numpy.ndarray. mini-batch of training examples, of shape (batch_size, self.n_u[0])
         """
-
-        # anneal learning rate
-        self.lr_shrd.set_value(self.lr / (1. + self.lr_anneal_coeff * self.batches_seen))
-
         # perform variational/sampling positive phase
         t1 = time.time()
         self.setup_pos_func(x)
@@ -550,15 +545,15 @@ class DBM(Model, Block):
     def monitor_stats(self, b, axis=(0,1), name=None, track_min=True, track_max=True):
         if name is None: assert hasattr(b, 'name')
         name = name if name else b.name
-
         channels = {name + '.mean': T.mean(b, axis=axis)}
         if track_min: channels[name + '.min'] = T.min(b, axis=axis)
         if track_max: channels[name + '.max'] = T.max(b, axis=axis)
-        
         return channels
 
     def get_monitoring_channels(self, x, y=None):
         chans = {}
+        chans['lr'] = self.lr
+        chans['iter'] = self.iter
 
         cpsamples = self.center_samples(self.psamples)
         cnsamples = self.center_samples(self.nsamples)
@@ -671,6 +666,9 @@ class DBM(Model, Block):
             rvals[1]: rerr
         """
         assert precondition in [None, 'jacobi']
+        self.cg_params.setdefault('batch_size', self.batch_size)
+
+        nsamples = nsamples[:self.cg_params['batch_size']]
         neg_energies = self.energy(nsamples)
 
         if self.computational_bs > 0:
@@ -690,7 +688,7 @@ class DBM(Model, Block):
         if precondition == 'jacobi':
             cnsamples = self.center_samples(nsamples)
             raw_M = fisher.compute_L_diag(cnsamples)
-            M = [1./(Mi + self.cg_params['damp']) for Mi in raw_M]
+            M = [(Mi + self.cg_params['damp']) for Mi in raw_M]
 
         if self.flags['minres']:
             rvals = minres.minres(
@@ -713,7 +711,8 @@ class DBM(Model, Block):
                     rtol = self.cg_params['rtol'],
                     maxit = self.cg_params['maxiter'],
                     damp = self.cg_params['damp'],
-                    Ms = M)
+                    Ms = M,
+                    profile = 0)
             [newgrads, flag, niter, rerr] = rvals[:4]
         else:
             rvals = lincg.linear_cg(
