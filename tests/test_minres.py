@@ -10,9 +10,11 @@ from DBM import minres
 rng = numpy.random.RandomState(23091)
 nparams = 1000
 
-def init_psd_mat(size):
+def init_psd_mat(size, damp=0):
     temp = rng.rand(size, size)
-    return numpy.dot(temp.T, temp)
+    temp += numpy.diag(damp * numpy.ones(size))
+    rval = numpy.dot(temp.T, temp)
+    return rval / rval.max()
 
 symb = {}
 symb['L'] = T.matrix("L")
@@ -28,7 +30,7 @@ def test_minres():
     rval = minres.minres(
             lambda x: [T.dot(symb['L'], x)],
             [symb['g']],
-            rtol=1e-20,
+            rtol=1e-14,
             damp = 0.,
             maxiter = 10000,
             profile=0)
@@ -37,7 +39,7 @@ def test_minres():
     t1 = time.time()
     [Linv_g, flag, iter] = f(vals['L'], vals['g'])
     print 'test_minres runtime (s):', time.time() - t1
-    numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=2)
+    numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=3)
 
 
 def test_minres_xinit():
@@ -47,7 +49,7 @@ def test_minres_xinit():
     symb_Linv_g = minres.minres(
             lambda x: [T.dot(symb['L'], x)],
             [symb['g']],
-            rtol=1e-20,
+            rtol=1e-14,
             damp = 0.,
             maxiter = 10000,
             xinit = [symb['xinit']],
@@ -57,6 +59,6 @@ def test_minres_xinit():
     t1 = time.time()
     Linv_g = f(vals['L'], vals['g'], vals['xinit'])[0]
     print 'test_minres_xinit runtime (s):', time.time() - t1
-    numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=1)
+    numpy.testing.assert_almost_equal(Linv_g, vals['Linv_g'], decimal=3)
 
 
